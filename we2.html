@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restaurant Inventory Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: #ffffff;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            overflow: hidden;
+        }
+        .nav-item.active {
+            background-color: #4b5563;
+            color: #ffffff;
+            font-weight: 600;
+        }
+        .table-container {
+            overflow-x: auto;
+        }
+        .scroll-y {
+            overflow-y: auto;
+        }
+        .toast {
+            visibility: hidden;
+            min-width: 250px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 16px;
+            position: fixed;
+            z-index: 1000;
+            left: 50%;
+            bottom: 30px;
+            transform: translateX(-50%);
+            font-size: 17px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .toast.show {
+            visibility: visible;
+            animation: fadein 0.5s, fadeout 0.5s 2.5s;
+        }
+        @keyframes fadein {
+            from {bottom: 0; opacity: 0;}
+            to {bottom: 30px; opacity: 1;}
+        }
+        @keyframes fadeout {
+            from {bottom: 30px; opacity: 1;}
+            to {bottom: 0; opacity: 0;}
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-6 md:p-8">
+    <div class="main-container">
+        <!-- Header -->
+        <header class="bg-gray-800 text-white p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between rounded-t-xl">
+            <h1 class="text-xl sm:text-2xl font-bold">Café Inventory Manager</h1>
+            <nav class="mt-4 sm:mt-0 space-x-2 sm:space-x-4">
+                <button id="nav-dashboard" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700 active">Dashboard</button>
+                <button id="nav-inventory" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700">Inventory</button>
+                <button id="nav-receiving" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700">Receiving</button>
+                <button id="nav-consumption" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700">Consumption</button>
+                <button id="nav-waste" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700">Waste</button>
+                <button id="nav-transfers" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700">Transfers</button>
+                <button id="nav-items-categories" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700">Items & Categories</button>
+                <button id="nav-data" class="nav-item p-2 rounded-lg transition-colors duration-200 hover:bg-gray-700">Data</button>
+            </nav>
+        </header>
+
+        <!-- Main Content Area -->
+        <main id="content-container" class="p-4 sm:p-6 flex-grow overflow-y-auto">
+            <!-- Content for different modules will be rendered here -->
+            <div id="loading-spinner" class="flex items-center justify-center p-8 hidden">
+                <svg class="animate-spin h-8 w-8 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+        </main>
+
+        <!-- Toast Notifications -->
+        <div id="toast" class="toast"></div>
+
+        <!-- Modals and Dialogs -->
+        <div id="modal-container" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4">
+            <!-- Modal content will be dynamically loaded here -->
+        </div>
+    </div>
+
+    <!-- SheetJS for XLSX export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.17.0/dist/xlsx.full.min.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+
+            /* ====================================
+             * 🛠️ Core Application Logic & State
+             * ==================================== */
+
+            // App state and constants
+            const appState = {
+                items: [],
+                ledger: [],
+                categories: [
+                    'Produce', 'Dairy', 'Bakery & Pastry', 'Meat', 'Poultry', 'Seafood', 'Dry Goods',
+                    'Spices & Herbs', 'Coffee Beans', 'Tea & Infusions', 'Syrups', 'Non-Dairy Milks',
+                    'Frozen', 'Canned', 'Sauces & Condiments', 'Packaging & Disposables', 'Cleaning Supplies'
+                ],
+                units: ['pcs', 'box', 'pack', 'kg', 'g', 'L', 'mL', 'bottle', 'jar', 'tray'],
+                locations: ['FOH', 'BOH', 'Main Store'],
+                defaultNearExpiryDays: 7,
+            };
+
+            // Global variable to store last item form data for auto-refill
+            let lastItemFormData = null;
+
+            const storeName = 'inventoryDB';
+            const itemStore = 'items';
+            const ledgerStore = 'ledger';
+            let db;
+
+            // Utility functions
+            const showToast = (message, isError = false) => {
+                const toast = document.getElementById('toast');
+                toast.textContent = message;
+                toast.style.backgroundColor = isError ? '#dc2626' : '#333';
+                toast.classList.add('show');
+                setTimeout(() => {
+                    toast.classList.remove('show');
+                }, 3000);
+            };
+
+            const formatCurrency = (value) => parseFloat(value).toFixed(2);
+            const formatDate = (date) => new Date(date).toISOString().split('T')[0];
+
+            // IndexedDB wrapper functions
+            const openDB = () => {
+                return new Promise((resolve, reject) => {
+                    if (window.indexedDB) {
+                        const request = window.indexedDB.open(storeName, 1);
+                        request.onerror = (event) => {
+                            console.error("IndexedDB error:", event.target.errorCode);
+                            showToast("Error opening database. Using local storage.", true);
+                            resolve(false);
+                        };
+                        request.onupgradeneeded = (event) => {
+                            const db = event.target.result;
+                            if (!db.objectStoreNames.contains(itemStore)) {
+                                db.createObjectStore(itemStore, { keyPath: 'id' });
+                            }
+                            if (!db.objectStoreNames.contains(ledgerStore)) {
+                                db.createObjectStore(ledgerStore, { keyPath: 'id' });
+                            }
+                        };
+                        request.onsuccess = (event) => {
+                            db = event.target.result;
+                            resolve(true);
+                        };
+                    } else {
+                        showToast("IndexedDB not supported. Using local storage.", true);
+                        resolve(false);
+                    }
+                });
+            };
+
+            const saveData = async (store, data) => {
+                return new Promise((resolve, reject) => {
+                    if (db) {
+                        const transaction = db.transaction([store], 'readwrite');
+                        const objectStore = transaction.objectStore(store);
+                        const request = objectStore.clear(); // Clear before putting all
+                        request.onsuccess = () => {
+                           const putRequests = data.map(d => objectStore.put(d));
+                           Promise.all(putRequests).then(() => resolve());
+                        };
+                        request.onerror = (event) => {
+                            console.error("IndexedDB write error:", event.target.error);
+                            showToast("Failed to save data.", true);
+                            reject(event.target.error);
+                        };
+                    } else {
+                        localStorage.setItem(store, JSON.stringify(data));
+                        resolve();
+                    }
+                });
+            };
+
+            const getData = async (store) => {
+                return new Promise((resolve, reject) => {
+                    if (db) {
+                        const transaction = db.transaction([store], 'readonly');
+                        const objectStore = transaction.objectStore(store);
+                        const request = objectStore.getAll();
+                        request.onsuccess = () => resolve(request.result);
+                        request.onerror = (event) => {
+                            console.error("IndexedDB read error:", event.target.error);
+                            showToast("Failed to load data.", true);
+                            reject(event.target.error);
+                        };
+                    } else {
+                        const data = localStorage.getItem(store);
+                        resolve(data ? JSON.parse(data) : []);
+                    }
+                });
+            };
+
+            // Initial data loading
+            const loadData = async () => {
+                document.getElementById('loading-spinner').classList.remove('hidden');
+                try {
+                    const dbSupported = await openDB();
+                    if (dbSupported) {
+                        appState.items = await getData(itemStore);
+                        appState.ledger = await getData(ledgerStore);
+                    } else {
+                        // Fallback to localStorage if IndexedDB is not available
+                        appState.items = JSON.parse(localStorage.getItem(itemStore) || '[]');
+                        appState.ledger = JSON.parse(localStorage.getItem(ledgerStore) || '[]');
+                    }
+                    console.log('Data loaded successfully.');
+                } catch (error) {
+                    console.error('Failed to load data:', error);
+                    showToast('Failed to load data.', true);
+                } finally {
+                    document.getElementById('loading-spinner').classList.add('hidden');
+                }
+            };
+
+            // Data saving to DB
+            const saveAllData = async () => {
+                if (db) {
+                    await saveData(itemStore, appState.items);
+                    await saveData(ledgerStore, appState.ledger);
+                } else {
+                    localStorage.setItem(itemStore, JSON.stringify(appState.items));
+                    localStorage.setItem(ledgerStore, JSON.stringify(appState.ledger));
+                }
+                showToast("Data saved successfully!");
+            };
+
+            // Derived state: calculate current stock
+            const getStockByLocation = (itemId, location) => {
+                const itemLedger = appState.ledger.filter(entry => entry.itemId === itemId);
+                let stock = 0;
+
+                itemLedger.forEach(entry => {
+                    if (entry.action === 'RECEIVE') {
+                        if (entry.location === location) stock += entry.quantity;
+                    } else if (entry.action === 'CONSUME' || entry.action === 'WASTE') {
+                        if (entry.location === location) stock -= entry.quantity;
+                    } else if (entry.action === 'TRANSFER') {
+                        if (entry.fromLocation === location) stock -= entry.quantity;
+                        if (entry.toLocation === location) stock += entry.quantity;
+                    }
+                });
+                return stock;
+            };
+
+            const getCombinedInventory = () => {
+                const inventory = {};
+                appState.items.forEach(item => {
+                    const stock = {};
+                    appState.locations.forEach(loc => {
+                        stock[loc] = getStockByLocation(item.id, loc);
+                    });
+
+                    // --- FIFO Logic for Earliest Expiry ---
+                    let earliestExpiry = null;
+                    const totalConsumed = appState.ledger
+                        .filter(l => l.itemId === item.id && (l.action === 'CONSUME' || l.action === 'WASTE'))
+                        .reduce((sum, entry) => sum + entry.quantity, 0);
+
+                    const receivedStock = appState.ledger
+                        .filter(l => l.itemId === item.id && l.action === 'RECEIVE' && l.expiryDate)
+                        .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+
+                    let remainingToAccountFor = totalConsumed;
+
+                    for (const received of receivedStock) {
+                        if (remainingToAccountFor > 0) {
+                            remainingToAccountFor -= received.quantity;
+                        } else {
+                            earliestExpiry = received.expiryDate;
+                            break;
+                        }
+                    }
+                    // --- End of FIFO Logic ---
+
+                    const total = Object.values(stock).reduce((sum, q) => sum + q, 0);
+
+                    inventory[item.id] = {
+                        ...item,
+                        stock,
+                        total,
+                        earliestExpiry,
+                        lowStock: appState.locations.some(loc => item.lowStockThresholds?.[loc] !== 0 && stock[loc] <= (item.lowStockThresholds?.[loc] || 0)),
+                        nearExpiry: earliestExpiry && (new Date(earliestExpiry).getTime() - new Date().getTime()) / (1000 * 3600 * 24) <= (item.nearExpiryDays || appState.defaultNearExpiryDays)
+                    };
+                });
+                return Object.values(inventory);
+            };
+
+            const getNearExpiryStock = (itemId, days) => {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0); // Normalize to start of day
+                const futureDate = new Date();
+                futureDate.setDate(today.getDate() + days);
+
+                return appState.ledger
+                    .filter(entry => entry.itemId === itemId && entry.expiryDate && entry.action === 'RECEIVE')
+                    .reduce((sum, entry) => {
+                        const expiryDate = new Date(entry.expiryDate);
+                        if (expiryDate >= today && expiryDate <= futureDate) {
+                            return sum + entry.quantity;
+                        }
+                        return sum;
+                    }, 0);
+            };
+
+            /* ====================================
+             * 🎨 UI Rendering & Event Handling
+             * ==================================== */
+
+            // Navigation
+            const contentContainer = document.getElementById('content-container');
+            const navItems = document.querySelectorAll('.nav-item');
+
+            const navigate = (id) => {
+                navItems.forEach(item => item.classList.remove('active'));
+                const selectedNav = document.getElementById(id);
+                if (selectedNav) selectedNav.classList.add('active');
+
+                contentContainer.innerHTML = '';
+                switch (id) {
+                    case 'nav-dashboard': renderDashboard(); break;
+                    case 'nav-inventory': renderInventory('All'); break;
+                    case 'nav-receiving': renderLedgerModule('RECEIVE'); break;
+                    case 'nav-consumption': renderLedgerModule('CONSUME'); break;
+                    case 'nav-waste': renderLedgerModule('WASTE'); break;
+                    case 'nav-transfers': renderLedgerModule('TRANSFER'); break;
+                    case 'nav-items-categories': renderItemsCategories(); break;
+                    case 'nav-data': renderDataManagement(); break;
+                }
+            };
+            navItems.forEach(btn => btn.addEventListener('click', (e) => navigate(e.target.id)));
+
+            // Modal handling
+            const modalContainer = document.getElementById('modal-container');
+            const showModal = (content) => {
+                modalContainer.innerHTML = content;
+                modalContainer.classList.remove('hidden');
+            };
+            const hideModal = () => {
+                modalContainer.classList.add('hidden');
+                modalContainer.innerHTML = '';
+            };
+            modalContainer.addEventListener('click', (e) => {
+                if (e.target.id === 'modal-container') hideModal();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && !modalContainer.classList.contains('hidden')) {
+                    hideModal();
+                }
+            });
+
+            // Table rendering utility
+            const renderTable = (headers, data) => {
+                if (!data || data.length === 0) {
+                    return `
+                        <p class="text-center text-gray-500 py-8">No data available. Add some records to get started!</p>
+                    `;
+                }
+
+                const tableHeader = headers.map(h => `<th class="p-4 text-left text-sm font-semibold text-gray-700 uppercase">${h}</th>`).join('');
+                const tableRows = data.map(row => {
+                    const cells = row.map(cell => `<td class="p-4 whitespace-nowrap text-sm text-gray-600">${cell}</td>`).join('');
+                    return `<tr class="hover:bg-gray-50">${cells}</tr>`;
+                }).join('');
+
+                return `
+                    <div class="shadow-sm overflow-hidden border border-gray-200 rounded-lg">
+                        <div class="table-container">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>${tableHeader}</tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            };
+
+            const renderFilterableTable = (module, data, headers, transformFn) => {
+                const moduleName = module.charAt(0).toUpperCase() + module.slice(1);
+                const categories = ['All', ...appState.categories];
+
+                contentContainer.innerHTML = `
+                    <h2 class="text-2xl font-semibold mb-4">${moduleName} Ledger</h2>
+                    <div class="flex flex-col sm:flex-row items-center gap-4 mb-4">
+                        <div class="relative w-full sm:w-auto">
+                            <input type="text" id="search-input" placeholder="Search..." class="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                            <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        </div>
+                        <div class="w-full sm:w-auto flex flex-col sm:flex-row items-center gap-4">
+                            <input type="date" id="start-date" class="w-full sm:w-auto p-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                            <span class="text-gray-500">to</span>
+                            <input type="date" id="end-date" class="w-full sm:w-auto p-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                        </div>
+                        <select id="category-filter" class="w-full sm:w-auto p-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                            ${categories.map(c => `<option value="${c}">${c}</option>`).join('')}
+                        </select>
+                        <button id="add-btn" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700 transition-colors duration-200 w-full sm:w-auto flex-shrink-0">Add New</button>
+                        <button id="export-btn" class="bg-green-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-500 transition-colors duration-200 w-full sm:w-auto flex-shrink-0">Export XLS</button>
+                    </div>
+                    <div id="table-content">${renderTable(headers, data.map(transformFn))}</div>
+                `;
+
+                let currentFilteredData = data;
+
+                // Add event listeners for filters and export
+                const searchInput = document.getElementById('search-input');
+                const startDateInput = document.getElementById('start-date');
+                const endDateInput = document.getElementById('end-date');
+                const categoryFilter = document.getElementById('category-filter');
+                const tableContent = document.getElementById('table-content');
+
+                const applyFilters = () => {
+                    const searchText = searchInput.value.toLowerCase();
+                    const startDate = startDateInput.value ? new Date(startDateInput.value) : null;
+                    const endDate = endDateInput.value ? new Date(endDateInput.value) : null;
+                    const selectedCategory = categoryFilter.value;
+
+                    currentFilteredData = data.filter(item => {
+                        const meetsSearch = JSON.stringify(item).toLowerCase().includes(searchText);
+
+                        const itemCategory = appState.items.find(i => i.id === item.itemId)?.category;
+                        const meetsCategory = selectedCategory === 'All' || itemCategory === selectedCategory;
+
+                        const meetsDate = (!startDate || new Date(item.timestamp) >= startDate) &&
+                                          (!endDate || new Date(item.timestamp) <= endDate);
+
+                        return meetsSearch && meetsCategory && meetsDate;
+                    });
+
+                    const sortedData = currentFilteredData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                    tableContent.innerHTML = renderTable(headers, sortedData.map(transformFn));
+                };
+
+                searchInput.addEventListener('input', applyFilters);
+                startDateInput.addEventListener('change', applyFilters);
+                endDateInput.addEventListener('change', applyFilters);
+                categoryFilter.addEventListener('change', applyFilters);
+
+                document.getElementById('export-btn').addEventListener('click', () => {
+                    showExportModal(module, headers, currentFilteredData, transformFn);
+                });
+                document.getElementById('add-btn').addEventListener('click', () => renderFormModal(module.toUpperCase()));
+
+                // Add event listener for table actions
+                document.getElementById('table-content').addEventListener('click', (e) => {
+                    if (e.target.classList.contains('edit-btn')) {
+                        const ledgerId = e.target.dataset.id;
+                        renderFormModal(module.toUpperCase(), ledgerId);
+                    }
+                });
+            };
+
+            // Individual Module Renderers
+            const renderDashboard = () => {
+                const inventory = getCombinedInventory();
+                const totalSKUs = appState.items.length;
+                const totalOnHand = inventory.reduce((sum, item) => sum + item.total, 0);
+                const nearExpiryItems = inventory.filter(item => item.nearExpiry);
+                const lowStockItems = inventory.filter(item => item.lowStock);
+
+                let recentActivity = [...appState.ledger]
+                    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+                    .slice(0, 10);
+
+                recentActivity = recentActivity.map(entry => {
+                    const item = appState.items.find(i => i.id === entry.itemId);
+                    if (!item) return ''; // Guard against missing items
+                    const action = entry.action.toLowerCase();
+                    let description;
+                    if (action === 'transfer') {
+                        description = `${entry.quantity} ${item.unit} of ${item.name} from ${entry.fromLocation} to ${entry.toLocation}`;
+                    } else {
+                        description = `${entry.quantity} ${item.unit} of ${item.name} at ${entry.location}`;
+                    }
+                    return `<li class="p-2 border-b border-gray-100 flex items-center justify-between"><div class="flex items-center"><span class="font-semibold text-sm mr-2">${formatDate(entry.timestamp)}</span> <span class="text-gray-600 text-sm">Action: ${action.toUpperCase()}, ${description}</span></div></li>`;
+                }).join('');
+
+                contentContainer.innerHTML = `
+                    <h2 class="text-2xl font-semibold mb-6">Dashboard</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                        <div class="bg-gray-50 p-6 rounded-xl shadow-sm border border-gray-200">
+                            <h3 class="text-lg font-semibold text-gray-800">Total SKUs</h3>
+                            <p class="text-4xl font-bold text-gray-600 mt-2">${totalSKUs}</p>
+                        </div>
+                        <div class="bg-gray-50 p-6 rounded-xl shadow-sm border border-gray-200">
+                            <h3 class="text-lg font-semibold text-gray-800">Total On-Hand</h3>
+                            <p class="text-4xl font-bold text-gray-600 mt-2">${totalOnHand}</p>
+                        </div>
+                        <div class="bg-red-50 p-6 rounded-xl shadow-sm border border-red-200">
+                            <h3 class="text-lg font-semibold text-red-800">Near Expiry Items</h3>
+                            <p class="text-4xl font-bold text-red-600 mt-2">${nearExpiryItems.length}</p>
+                        </div>
+                        <div class="bg-yellow-50 p-6 rounded-xl shadow-sm border border-yellow-200">
+                            <h3 class="text-lg font-semibold text-yellow-800">Low Stock Items</h3>
+                            <p class="text-4xl font-bold text-yellow-600 mt-2">${lowStockItems.length}</p>
+                        </div>
+                    </div>
+
+                    <!-- Alerts Section -->
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mb-8">
+                        <h3 class="text-xl font-semibold mb-4">Alerts</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <h4 class="font-bold text-red-600 mb-2">Near Expiry Items</h4>
+                                <ul class="space-y-2">
+                                    ${nearExpiryItems.length > 0 ? nearExpiryItems.map(item => `
+                                        <li class="bg-red-50 p-3 rounded-lg flex justify-between items-center text-red-800 border border-red-200">
+                                            <span>${item.name} (${formatDate(item.earliestExpiry)})</span>
+                                            <span class="text-sm font-semibold">${item.total} ${item.unit}</span>
+                                        </li>
+                                    `).join('') : '<p class="text-gray-500">No items near expiry. All good!</p>'}
+                                </ul>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-yellow-600 mb-2">Low Stock Items</h4>
+                                <ul class="space-y-2">
+                                    ${lowStockItems.length > 0 ? lowStockItems.map(item => `
+                                        <li class="bg-yellow-50 p-3 rounded-lg flex justify-between items-center text-yellow-800 border border-yellow-200">
+                                            <span>${item.name}</span>
+                                            <span class="text-sm font-semibold">${item.total} ${item.unit}</span>
+                                        </li>
+                                    `).join('') : '<p class="text-gray-500">No low stock items. Great job!</p>'}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <h3 class="text-xl font-semibold mb-4">Recent Activity</h3>
+                        <ul class="divide-y divide-gray-200">
+                            ${recentActivity || '<li class="p-2 text-gray-500">No recent activity.</li>'}
+                        </ul>
+                    </div>
+                `;
+            };
+
+            const renderInventory = (location) => {
+                const inventory = getCombinedInventory();
+
+                const headers = ['Item', 'Category', ...appState.locations, 'Total', 'Unit', 'Earliest Expiry', 'Low Stock', 'Near Expiry'];
+
+                const transformFn = (item) => {
+                    const stockCells = appState.locations.map(loc => item.stock[loc]);
+                    const lowStockFlag = item.lowStock;
+                    const nearExpiryFlag = item.nearExpiry;
+
+                    return [
+                        item.name,
+                        item.category,
+                        ...stockCells,
+                        item.total,
+                        item.unit,
+                        item.earliestExpiry ? formatDate(item.earliestExpiry) : '-',
+                        `<span class="px-2 py-1 text-xs font-semibold rounded-full ${lowStockFlag ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">${lowStockFlag ? 'Yes' : 'No'}</span>`,
+                        `<span class="px-2 py-1 text-xs font-semibold rounded-full ${nearExpiryFlag ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">${nearExpiryFlag ? 'Yes' : 'No'}</span>`
+                    ];
+                };
+
+                let currentFilteredData = inventory;
+
+                const renderTableWithFilters = () => {
+                    const category = document.getElementById('inventory-category-filter')?.value || 'All';
+                    const location = document.getElementById('inventory-location-filter')?.value || 'All';
+                    const searchQuery = document.getElementById('inventory-search')?.value.toLowerCase() || '';
+
+                    currentFilteredData = inventory;
+
+                    if (category !== 'All') {
+                        currentFilteredData = currentFilteredData.filter(item => item.category === category);
+                    }
+                    if (location !== 'All') {
+                        currentFilteredData = currentFilteredData.filter(item => item.stock[location] > 0);
+                    }
+                    if (searchQuery) {
+                        currentFilteredData = currentFilteredData.filter(item => item.name.toLowerCase().includes(searchQuery));
+                    }
+
+                    const tableHeaders = ['Item', 'Category', ...appState.locations, 'Total', 'Unit', 'Earliest Expiry', 'Low Stock', 'Near Expiry'];
+                    const transformedFilteredData = currentFilteredData.map(transformFn);
+
+                    document.getElementById('inventory-table-container').innerHTML = renderTable(tableHeaders, transformedFilteredData);
+                };
+
+                contentContainer.innerHTML = `
+                    <h2 class="text-2xl font-semibold mb-4">Inventory</h2>
+                    <div class="flex flex-col sm:flex-row items-center gap-4 mb-4">
+                        <div class="relative w-full sm:w-auto">
+                            <input type="text" id="inventory-search" placeholder="Search..." class="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                            <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        </div>
+                        <select id="inventory-category-filter" class="w-full sm:w-auto p-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                            <option value="All">All Categories</option>
+                            ${appState.categories.map(c => `<option value="${c}">${c}</option>`).join('')}
+                        </select>
+                        <select id="inventory-location-filter" class="w-full sm:w-auto p-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                            <option value="All">All Locations</option>
+                            ${appState.locations.map(loc => `<option value="${loc}">${loc}</option>`).join('')}
+                        </select>
+                        <button id="export-inventory-btn" class="bg-green-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-500 transition-colors duration-200 w-full sm:w-auto flex-shrink-0">Export XLS</button>
+                    </div>
+                    <div id="inventory-table-container">${renderTable(headers, inventory.map(transformFn))}</div>
+                `;
+
+                document.getElementById('inventory-search').addEventListener('input', renderTableWithFilters);
+                document.getElementById('inventory-category-filter').addEventListener('change', renderTableWithFilters);
+                document.getElementById('inventory-location-filter').addEventListener('change', renderTableWithFilters);
+                document.getElementById('export-inventory-btn').addEventListener('click', () => {
+                    showExportModal('Inventory', headers, currentFilteredData, transformFn);
+                });
+
+                renderTableWithFilters(); // Initial render with empty filters
+            };
+
+            const renderLedgerModule = (type) => {
+                const ledgerData = appState.ledger.filter(l => l.action === type);
+
+                let headers;
+                let transformFn;
+
+                switch (type) {
+                    case 'RECEIVE':
+                        headers = ['Timestamp', 'Item', 'Category', 'Quantity', 'Unit Price', 'Total Cost', 'Location', 'Payment', 'Expiry', 'Notes', 'Actions'];
+                        transformFn = (entry) => {
+                            const item = appState.items.find(i => i.id === entry.itemId);
+                            return [
+                                formatDate(entry.timestamp),
+                                item?.name || 'N/A',
+                                item?.category || 'N/A',
+                                entry.quantity,
+                                formatCurrency(entry.unitPrice),
+                                formatCurrency(entry.quantity * entry.unitPrice),
+                                entry.location,
+                                entry.paymentType,
+                                entry.expiryDate ? formatDate(entry.expiryDate) : '-',
+                                entry.notes || '-',
+                                `<button class="edit-btn bg-gray-200 text-gray-800 px-3 py-1 rounded-full text-xs font-semibold hover:bg-gray-300" data-id="${entry.id}">Edit</button>`
+                            ];
+                        };
+                        break;
+                    case 'CONSUME':
+                        headers = ['Timestamp', 'Item', 'Category', 'Location', 'Quantity', 'Notes', 'Actions'];
+                        transformFn = (entry) => {
+                            const item = appState.items.find(i => i.id === entry.itemId);
+                            return [
+                                formatDate(entry.timestamp),
+                                item?.name || 'N/A',
+                                item?.category || 'N/A',
+                                entry.location,
+                                entry.quantity,
+                                entry.notes || '-',
+                                `<button class="edit-btn bg-gray-200 text-gray-800 px-3 py-1 rounded-full text-xs font-semibold hover:bg-gray-300" data-id="${entry.id}">Edit</button>`
+                            ];
+                        };
+                        break;
+                    case 'WASTE':
+                        headers = ['Timestamp', 'Item', 'Category', 'Location', 'Quantity', 'Reason', 'Notes', 'Actions'];
+                        transformFn = (entry) => {
+                            const item = appState.items.find(i => i.id === entry.itemId);
+                            return [
+                                formatDate(entry.timestamp),
+                                item?.name || 'N/A',
+                                item?.category || 'N/A',
+                                entry.location,
+                                entry.quantity,
+                                entry.reason,
+                                entry.notes || '-',
+                                `<button class="edit-btn bg-gray-200 text-gray-800 px-3 py-1 rounded-full text-xs font-semibold hover:bg-gray-300" data-id="${entry.id}">Edit</button>`
+                            ];
+                        };
+                        break;
+                    case 'TRANSFER':
+                        headers = ['Timestamp', 'Item', 'Category', 'Quantity', 'From Location', 'To Location', 'Notes', 'Actions'];
+                        transformFn = (entry) => {
+                            const item = appState.items.find(i => i.id === entry.itemId);
+                            return [
+                                formatDate(entry.timestamp),
+                                item?.name || 'N/A',
+                                item?.category || 'N/A',
+                                entry.quantity,
+                                entry.fromLocation,
+                                entry.toLocation,
+                                entry.notes || '-',
+                                `<button class="edit-btn bg-gray-200 text-gray-800 px-3 py-1 rounded-full text-xs font-semibold hover:bg-gray-300" data-id="${entry.id}">Edit</button>`
+                            ];
+                        };
+                        break;
+                    default:
+                        break;
+                }
+                renderFilterableTable(type.toLowerCase(), ledgerData, headers, transformFn);
+            };
+
+            const renderItemsCategories = () => {
+                const headers = ['Name', 'Category', 'Supplier', 'Unit', 'FOH Threshold', 'BOH Threshold', 'Store Threshold', 'Near Expiry Days', 'Actions'];
+                const transformFn = (item) => [
+                    item.name,
+                    item.category,
+                    item.supplier || '-',
+                    item.unit,
+                    item.lowStockThresholds?.FOH || '-',
+                    item.lowStockThresholds?.BOH || '-',
+                    item.lowStockThresholds?.['Main Store'] || '-',
+                    item.nearExpiryDays || '-',
+                    `<button class="edit-item-btn bg-gray-200 text-gray-800 px-3 py-1 rounded-full text-xs font-semibold hover:bg-gray-300" data-id="${item.id}">Edit</button>`
+                ];
+
+                contentContainer.innerHTML = `
+                    <h2 class="text-2xl font-semibold mb-4">Items & Categories</h2>
+                    <div class="flex flex-col sm:flex-row gap-4 mb-4">
+                        <button id="add-item-btn" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700 w-full sm:w-auto">Add New Item</button>
+                        <button id="export-items-btn" class="bg-green-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-500 transition-colors duration-200 w-full sm:w-auto flex-shrink-0">Export XLS</button>
+                    </div>
+                    <div id="items-table-container">
+                        ${renderTable(headers, appState.items.map(transformFn))}
+                    </div>
+                `;
+
+                // Add event listeners for new item button and table actions using event delegation
+                document.getElementById('add-item-btn').addEventListener('click', () => renderFormModal('item'));
+                document.getElementById('export-items-btn').addEventListener('click', () => {
+                    showExportModal('Items_Categories', headers, appState.items, transformFn);
+                });
+
+                document.getElementById('items-table-container').addEventListener('click', (e) => {
+                    if (e.target.classList.contains('edit-item-btn')) {
+                        const itemId = e.target.dataset.id;
+                        renderFormModal('item', itemId);
+                    }
+                });
+            };
+
+            const renderDataManagement = () => {
+                contentContainer.innerHTML = `
+                    <h2 class="text-2xl font-semibold mb-4">Data Management</h2>
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-4">
+                        <div>
+                            <h3 class="text-lg font-semibold">Backup & Export</h3>
+                            <p class="text-gray-600 mb-2">Export all app data as a single JSON file for backup.</p>
+                            <button id="export-json-btn" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-500 transition-colors duration-200">Export JSON</button>
+                        </div>
+                        <hr class="border-gray-200">
+                        <div>
+                            <h3 class="text-lg font-semibold">Import Data</h3>
+                            <p class="text-gray-600 mb-2">Import a JSON backup file to restore or merge data.</p>
+                            <input type="file" id="import-json-file" accept=".json" class="hidden">
+                            <button id="import-json-btn" class="bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-purple-500 transition-colors duration-200">Import JSON</button>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('export-json-btn').addEventListener('click', () => {
+                    const data = {
+                        items: appState.items,
+                        ledger: appState.ledger
+                    };
+                    const jsonString = JSON.stringify(data, null, 2);
+                    const blob = new Blob([jsonString], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `inventory_backup_${Date.now()}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    showToast("Data exported successfully.");
+                });
+
+                document.getElementById('import-json-btn').addEventListener('click', () => {
+                    document.getElementById('import-json-file').click();
+                });
+
+                document.getElementById('import-json-file').addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = async (event) => {
+                        try {
+                            const importedData = JSON.parse(event.target.result);
+                            if (!importedData.items || !importedData.ledger) {
+                                showToast("Invalid JSON file format.", true);
+                                return;
+                            }
+
+                            showModal(`
+                                <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-lg">
+                                    <h3 class="text-xl font-semibold mb-4">Confirm Import</h3>
+                                    <p class="text-gray-700 mb-4">Importing data will overwrite existing records. Do you want to proceed?</p>
+                                    <div class="flex justify-end gap-2">
+                                        <button type="button" id="cancel-import" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-semibold hover:bg-gray-300">Cancel</button>
+                                        <button type="button" id="confirm-import" class="bg-red-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-red-500">Confirm Overwrite</button>
+                                    </div>
+                                </div>
+                            `);
+
+                            document.getElementById('confirm-import').addEventListener('click', async () => {
+                                appState.items = importedData.items;
+                                appState.ledger = importedData.ledger;
+                                await saveAllData();
+                                hideModal();
+                                showToast("Data imported and restored successfully!");
+                                navigate('nav-dashboard'); // Refresh view
+                            });
+                            document.getElementById('cancel-import').addEventListener('click', hideModal);
+
+                        } catch (error) {
+                            showToast("Failed to parse JSON file.", true);
+                            console.error(error);
+                        }
+                    };
+                    reader.readAsText(file);
+                });
+            };
+
+            const renderFormModal = (type, ledgerId = null) => {
+                let formContent = '';
+                let title = '';
+
+                const ledgerEntry = ledgerId ? appState.ledger.find(l => l.id === ledgerId) : null;
+                const isEdit = !!ledgerId;
+                const item = ledgerEntry ? appState.items.find(i => i.id === ledgerEntry.itemId) : null;
+
+                switch (type) {
+                    case 'item':
+                        title = isEdit ? 'Edit Item' : 'Add New Item';
+                        const itemToEdit = isEdit ? appState.items.find(i => i.id === ledgerId) : null;
+
+                        // Use lastItemFormData for auto-refill if not editing
+                        const formState = isEdit ? itemToEdit : lastItemFormData;
+
+                        formContent = `
+                            <form id="item-form" class="space-y-4">
+                                <div>
+                                    <label for="item-name" class="block text-sm font-medium text-gray-700">Name</label>
+                                    <input type="text" id="item-name" value="${formState?.name || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                </div>
+                                <div>
+                                    <label for="item-supplier" class="block text-sm font-medium text-gray-700">Supplier</label>
+                                    <input type="text" id="item-supplier" value="${formState?.supplier || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">
+                                </div>
+                                <div>
+                                    <label for="item-category" class="block text-sm font-medium text-gray-700">Category</label>
+                                    <select id="item-category" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                        ${appState.categories.map(c => `<option value="${c}" ${formState?.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="item-unit" class="block text-sm font-medium text-gray-700">Unit</label>
+                                    <select id="item-unit" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                        ${appState.units.map(u => `<option value="${u}" ${formState?.unit === u ? 'selected' : ''}>${u}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="space-y-2">
+                                    <label class="block text-sm font-medium text-gray-700">Low-Stock Thresholds (pcs)</label>
+                                    ${appState.locations.map(loc => `
+                                        <div>
+                                            <label for="threshold-${loc}" class="block text-xs font-normal text-gray-500">${loc}</label>
+                                            <input type="number" id="threshold-${loc}" value="${formState?.lowStockThresholds?.[loc] || 0}" min="0" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">
+                                        </div>
+                                    `).join('')}
+                                </div>
+                                <div>
+                                    <label for="near-expiry-days" class="block text-sm font-medium text-gray-700">Notify Before Expiry (days)</label>
+                                    <input type="number" id="near-expiry-days" value="${formState?.nearExpiryDays || appState.defaultNearExpiryDays}" min="0" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">
+                                </div>
+                                <div>
+                                    <label for="item-notes" class="block text-sm font-medium text-gray-700">Notes</label>
+                                    <textarea id="item-notes" rows="3" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">${formState?.notes || ''}</textarea>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-form" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-semibold hover:bg-gray-300">Cancel</button>
+                                    <button type="submit" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700">${isEdit ? 'Update Item' : 'Add Item'}</button>
+                                </div>
+                            </form>
+                        `;
+                        break;
+                    case 'RECEIVE':
+                        title = isEdit ? 'Edit Received Stock' : 'Receive Stock';
+                        formContent = `
+                            <form id="transaction-form" class="space-y-4">
+                                <div>
+                                    <label for="item-search" class="block text-sm font-medium text-gray-700">Item</label>
+                                    <input type="text" id="item-search" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" placeholder="Search for item..." value="${item?.name || ''}" ${isEdit ? 'disabled' : ''} required>
+                                    <input type="hidden" id="item-id" value="${ledgerEntry?.itemId || ''}">
+                                    <div id="item-suggestions" class="absolute bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto w-full z-10 hidden"></div>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
+                                        <input type="number" id="quantity" value="${ledgerEntry?.quantity || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required min="1">
+                                    </div>
+                                    <div>
+                                        <label for="location" class="block text-sm font-medium text-gray-700">Location</label>
+                                        <select id="location" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                            ${appState.locations.map(loc => `<option value="${loc}" ${ledgerEntry?.location === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label for="unit-price" class="block text-sm font-medium text-gray-700">Unit Price</label>
+                                        <input type="number" step="0.01" id="unit-price" value="${ledgerEntry?.unitPrice || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required min="0">
+                                    </div>
+                                    <div>
+                                        <label for="payment-type" class="block text-sm font-medium text-gray-700">Payment Type</label>
+                                        <select id="payment-type" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                            <option value="Cash" ${ledgerEntry?.paymentType === 'Cash' ? 'selected' : ''}>Cash</option>
+                                            <option value="Card" ${ledgerEntry?.paymentType === 'Card' ? 'selected' : ''}>Card</option>
+                                            <option value="Credit" ${ledgerEntry?.paymentType === 'Credit' ? 'selected' : ''}>Credit</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="expiry-date" class="block text-sm font-medium text-gray-700">Expiry Date</label>
+                                    <input type="date" id="expiry-date" value="${ledgerEntry?.expiryDate || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">
+                                </div>
+                                <div>
+                                    <label for="notes" class="block text-sm font-medium text-gray-700">Notes</label>
+                                    <textarea id="notes" rows="2" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">${ledgerEntry?.notes || ''}</textarea>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-form" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-semibold hover:bg-gray-300">Cancel</button>
+                                    <button type="submit" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700">${isEdit ? 'Update' : 'Record'} Receiving</button>
+                                </div>
+                            </form>
+                        `;
+                        break;
+                    case 'CONSUME':
+                        title = isEdit ? 'Edit Consumption' : 'Consume Stock';
+                        formContent = `
+                            <form id="transaction-form" class="space-y-4">
+                                <div>
+                                    <label for="item-search" class="block text-sm font-medium text-gray-700">Item</label>
+                                    <input type="text" id="item-search" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" placeholder="Search for item..." value="${item?.name || ''}" ${isEdit ? 'disabled' : ''} required>
+                                    <input type="hidden" id="item-id" value="${ledgerEntry?.itemId || ''}">
+                                    <div id="item-suggestions" class="absolute bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto w-full z-10 hidden"></div>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
+                                        <input type="number" id="quantity" value="${ledgerEntry?.quantity || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required min="1">
+                                    </div>
+                                    <div>
+                                        <label for="location" class="block text-sm font-medium text-gray-700">Location</label>
+                                        <select id="location" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                            ${appState.locations.map(loc => `<option value="${loc}" ${ledgerEntry?.location === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="notes" class="block text-sm font-medium text-gray-700">Notes</label>
+                                    <textarea id="notes" rows="2" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">${ledgerEntry?.notes || ''}</textarea>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-form" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-semibold hover:bg-gray-300">Cancel</button>
+                                    <button type="submit" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700">${isEdit ? 'Update' : 'Record'} Consumption</button>
+                                </div>
+                            </form>
+                        `;
+                        break;
+                    case 'WASTE':
+                        title = isEdit ? 'Edit Waste Record' : 'Record Waste';
+                        formContent = `
+                            <form id="transaction-form" class="space-y-4">
+                                <div>
+                                    <label for="item-search" class="block text-sm font-medium text-gray-700">Item</label>
+                                    <input type="text" id="item-search" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" placeholder="Search for item..." value="${item?.name || ''}" ${isEdit ? 'disabled' : ''} required>
+                                    <input type="hidden" id="item-id" value="${ledgerEntry?.itemId || ''}">
+                                    <div id="item-suggestions" class="absolute bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto w-full z-10 hidden"></div>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
+                                        <input type="number" id="quantity" value="${ledgerEntry?.quantity || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required min="1">
+                                    </div>
+                                    <div>
+                                        <label for="location" class="block text-sm font-medium text-gray-700">Location</label>
+                                        <select id="location" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                            ${appState.locations.map(loc => `<option value="${loc}" ${ledgerEntry?.location === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="reason" class="block text-sm font-medium text-gray-700">Reason</label>
+                                    <input type="text" id="reason" value="${ledgerEntry?.reason || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                </div>
+                                <div>
+                                    <label for="notes" class="block text-sm font-medium text-gray-700">Notes</label>
+                                    <textarea id="notes" rows="2" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">${ledgerEntry?.notes || ''}</textarea>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-form" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-semibold hover:bg-gray-300">Cancel</button>
+                                    <button type="submit" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700">${isEdit ? 'Update' : 'Record'} Waste</button>
+                                </div>
+                            </form>
+                        `;
+                        break;
+                    case 'TRANSFER':
+                        title = isEdit ? 'Edit Transfer' : 'Transfer Stock';
+                        formContent = `
+                            <form id="transaction-form" class="space-y-4">
+                                <div>
+                                    <label for="item-search" class="block text-sm font-medium text-gray-700">Item</label>
+                                    <input type="text" id="item-search" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" placeholder="Search for item..." value="${item?.name || ''}" ${isEdit ? 'disabled' : ''} required>
+                                    <input type="hidden" id="item-id" value="${ledgerEntry?.itemId || ''}">
+                                    <div id="item-suggestions" class="absolute bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto w-full z-10 hidden"></div>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
+                                        <input type="number" id="quantity" value="${ledgerEntry?.quantity || ''}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required min="1">
+                                    </div>
+                                    <div>
+                                        <label for="from-location" class="block text-sm font-medium text-gray-700">From Location</label>
+                                        <select id="from-location" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                            ${appState.locations.map(loc => `<option value="${loc}" ${ledgerEntry?.fromLocation === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label for="to-location" class="block text-sm font-medium text-gray-700">To Location</label>
+                                        <select id="to-location" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500" required>
+                                            ${appState.locations.map(loc => `<option value="${loc}" ${ledgerEntry?.toLocation === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="notes" class="block text-sm font-medium text-gray-700">Notes</label>
+                                    <textarea id="notes" rows="2" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-gray-500 focus:ring-gray-500">${ledgerEntry?.notes || ''}</textarea>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-form" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-semibold hover:bg-gray-300">Cancel</button>
+                                    <button type="submit" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700">${isEdit ? 'Update' : 'Record'} Transfer</button>
+                                </div>
+                            </form>
+                        `;
+                        break;
+                    default:
+                        break;
+                }
+
+                showModal(`
+                    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-lg">
+                        <h3 class="text-xl font-semibold mb-4">${title}</h3>
+                        ${formContent}
+                    </div>
+                `);
+
+                const form = document.getElementById('item-form') || document.getElementById('transaction-form');
+                document.getElementById('cancel-form').addEventListener('click', hideModal);
+
+                // Form submission logic
+                form.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+
+                    if (type === 'item') {
+                        const name = document.getElementById('item-name').value;
+                        const supplier = document.getElementById('item-supplier').value;
+                        const category = document.getElementById('item-category').value;
+                        const unit = document.getElementById('item-unit').value;
+                        const notes = document.getElementById('item-notes').value;
+                        const nearExpiryDays = parseInt(document.getElementById('near-expiry-days').value, 10);
+                        const lowStockThresholds = {};
+                        appState.locations.forEach(loc => {
+                            lowStockThresholds[loc] = parseInt(document.getElementById(`threshold-${loc}`).value, 10) || 0;
+                        });
+
+                        const itemData = {
+                            id: isEdit ? ledgerId : crypto.randomUUID(), // Use crypto.randomUUID() for robust IDs
+                            name, category, unit, notes, supplier, nearExpiryDays,
+                            lowStockThresholds,
+                            nonAlcoholic: true,
+                        };
+
+                        if (isEdit) {
+                            const index = appState.items.findIndex(i => i.id === ledgerId);
+                            if (index > -1) {
+                                appState.items[index] = itemData;
+                            }
+                        } else {
+                            appState.items.push(itemData);
+                            // Set lastItemFormData for auto-refill
+                            lastItemFormData = { name, supplier, category, unit, notes, lowStockThresholds, nearExpiryDays };
+                        }
+
+                        await saveAllData();
+                        showToast(isEdit ? "Item updated successfully!" : "New item added!");
+                        hideModal();
+                        renderItemsCategories(); // Refresh the table
+
+                    } else {
+                        const itemId = document.getElementById('item-id').value;
+                        const quantity = parseFloat(document.getElementById('quantity').value);
+                        const notes = document.getElementById('notes')?.value || '';
+
+                        if (!itemId || isNaN(quantity) || quantity <= 0) {
+                            showToast("Please select an item and enter a valid quantity.", true);
+                            return;
+                        }
+
+                        let newRecord = {
+                            id: isEdit ? ledgerId : crypto.randomUUID(),
+                            timestamp: new Date().toISOString(),
+                            action: type,
+                            itemId,
+                            quantity,
+                            notes,
+                        };
+
+                        // Handle different transaction types
+                        switch(type) {
+                            case 'RECEIVE':
+                                newRecord.location = document.getElementById('location').value;
+                                newRecord.unitPrice = parseFloat(document.getElementById('unit-price').value);
+                                newRecord.paymentType = document.getElementById('payment-type').value;
+                                newRecord.expiryDate = document.getElementById('expiry-date').value;
+                                break;
+                            case 'CONSUME':
+                                newRecord.location = document.getElementById('location').value;
+                                const currentStock = getStockByLocation(itemId, newRecord.location);
+                                if (!isEdit && currentStock < quantity) {
+                                    showToast("Insufficient stock to record consumption.", true);
+                                    return;
+                                }
+                                break;
+                            case 'WASTE':
+                                newRecord.location = document.getElementById('location').value;
+                                newRecord.reason = document.getElementById('reason').value;
+                                const currentWasteStock = getStockByLocation(itemId, newRecord.location);
+                                if (!isEdit && currentWasteStock < quantity) {
+                                    showToast("Insufficient stock to record waste.", true);
+                                    return;
+                                }
+                                break;
+                            case 'TRANSFER':
+                                newRecord.fromLocation = document.getElementById('from-location').value;
+                                newRecord.toLocation = document.getElementById('to-location').value;
+                                const currentTransferStock = getStockByLocation(itemId, newRecord.fromLocation);
+                                if (!isEdit && currentTransferStock < quantity) {
+                                    showToast(`Insufficient stock in ${newRecord.fromLocation} to complete transfer.`, true);
+                                    return;
+                                }
+                                break;
+                        }
+
+                        if (isEdit) {
+                            const index = appState.ledger.findIndex(l => l.id === ledgerId);
+                            if (index > -1) {
+                                appState.ledger[index] = newRecord;
+                            }
+                        } else {
+                            appState.ledger.push(newRecord);
+                        }
+
+                        await saveAllData();
+                        showToast("Transaction recorded successfully!");
+                        hideModal();
+                        navigate(`nav-${type.toLowerCase()}`);
+                    }
+                });
+
+                // Typeahead for item search
+                if (type !== 'item' && !isEdit) {
+                    const itemSearchInput = document.getElementById('item-search');
+                    const itemSuggestions = document.getElementById('item-suggestions');
+                    const itemIdInput = document.getElementById('item-id');
+
+                    itemSearchInput.addEventListener('input', () => {
+                        const query = itemSearchInput.value.toLowerCase();
+                        if (query.length < 2) {
+                            itemSuggestions.classList.add('hidden');
+                            return;
+                        }
+
+                        const suggestions = appState.items.filter(i => i.name.toLowerCase().includes(query));
+                        itemSuggestions.innerHTML = suggestions.map(i => `
+                            <div class="p-2 cursor-pointer hover:bg-gray-100" data-id="${i.id}" data-name="${i.name}">
+                                ${i.name} (${i.category})
+                            </div>
+                        `).join('');
+
+                        itemSuggestions.classList.remove('hidden');
+                    });
+
+                    itemSuggestions.addEventListener('click', (e) => {
+                        const target = e.target.closest('div');
+                        if (target && target.dataset.id) {
+                            itemSearchInput.value = target.dataset.name;
+                            itemIdInput.value = target.dataset.id;
+                            itemSuggestions.classList.add('hidden');
+                        }
+                    });
+
+                    document.addEventListener('click', (e) => {
+                        if (!itemSuggestions.contains(e.target) && e.target !== itemSearchInput) {
+                            itemSuggestions.classList.add('hidden');
+                        }
+                    });
+                }
+            };
+
+            const showExportModal = (module, headers, data, transformFn) => {
+                showModal(`
+                    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-lg">
+                        <h3 class="text-xl font-semibold mb-4">Export to XLSX</h3>
+                        <p class="text-gray-700 mb-4">Choose which rows to export:</p>
+                        <div class="flex justify-end gap-2">
+                            <button type="button" id="export-all-btn" class="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-700">All Rows</button>
+                            <button type="button" id="export-filtered-btn" class="bg-gray-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-500">Filtered Rows</button>
+                        </div>
+                    </div>
+                `);
+
+                const transformForExport = (item) => {
+                    let transformedData = transformFn(item);
+
+                    // Remove the last column (Actions)
+                    const exportData = transformedData.slice(0, transformedData.length - 1);
+
+                    // Special case for Inventory: Low Stock and Near Expiry
+                    if (module === 'Inventory') {
+                        const itemDetails = appState.items.find(i => i.id === item.id);
+                        if (itemDetails) {
+                            // Low Stock: "Yes" or "No"
+                            const lowStockFlag = item.lowStock;
+                            exportData[exportData.length - 2] = lowStockFlag ? 'Yes' : 'No';
+
+                            // Near Expiry: number of items
+                            const nearExpiryDays = itemDetails.nearExpiryDays || appState.defaultNearExpiryDays;
+                            const nearExpiryQuantity = getNearExpiryStock(item.id, nearExpiryDays);
+                            exportData[exportData.length - 1] = nearExpiryQuantity;
+                        }
+                    }
+
+                    return exportData;
+                };
+
+                document.getElementById('export-all-btn').addEventListener('click', () => {
+                    const exportHeaders = headers.slice(0, headers.length - 1); // Remove 'Actions' column
+                    const allData = appState.ledger.filter(l => l.action === module.toUpperCase());
+                    const exportData = allData.map(transformForExport);
+                    const filename = `${module.replace(/ /g, '_')}.xlsx`;
+                    exportToXLSX(exportHeaders, exportData, filename);
+                    hideModal();
+                });
+
+                document.getElementById('export-filtered-btn').addEventListener('click', () => {
+                    const exportHeaders = headers.slice(0, headers.length - 1); // Remove 'Actions' column
+                    const exportData = data.map(transformForExport);
+                    const filename = `${module.replace(/ /g, '_')}_Filtered.xlsx`;
+                    exportToXLSX(exportHeaders, exportData, filename);
+                    hideModal();
+                });
+            };
+
+            const exportToXLSX = (headers, data, filename) => {
+                const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Inventory Data");
+                XLSX.writeFile(wb, filename);
+                showToast("Data exported to Excel!");
+            };
+
+            /* ====================================
+             * 🚀 Initialization
+             * ==================================== */
+
+            const init = async () => {
+                await loadData();
+                navigate('nav-dashboard');
+            };
+
+            init();
+        });
+    </script>
+</body>
+</html>
